@@ -798,6 +798,9 @@ std::string Model::UIsidebar(Undo& undo, Widgets& widgets, Scene_Maybe obj_opt, 
             ImGui::Text("Selected: %u", Halfedge_Mesh::id_of(*sel));
             std::visit(overloaded{[&](Halfedge_Mesh::VertexRef vert) {
                                       ImGui::Text("Halfedge: %u", vert->halfedge()->id());
+                                      ImGui::Text("x: %f", vert->pos.x);
+                                      ImGui::Text("y: %f", vert->pos.y);
+                                      ImGui::Text("z: %f", vert->pos.z);
                                   },
                                   [&](Halfedge_Mesh::EdgeRef edge) {
                                       ImGui::Text("Halfedge: %u", edge->halfedge()->id());
