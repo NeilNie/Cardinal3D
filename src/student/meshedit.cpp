@@ -50,6 +50,26 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_edge(Halfedge_Mesh::E
     return std::nullopt;
 }
 
+std::vector<Halfedge_Mesh::HalfedgeRef> get_all_half_edges_of_vertex(Halfedge_Mesh::VertexRef v) {
+
+    std::vector<Halfedge_Mesh::HalfedgeRef> h_edges;
+    auto current_half_edge = v->halfedge();
+    int counter = 0;
+
+    do {
+        if (counter % 2 != 0) {
+            current_half_edge = current_half_edge->next();
+            counter += 1;
+            continue;
+        }
+        h_edges.push_back(current_half_edge);
+        current_half_edge = current_half_edge->twin();
+        counter += 1;
+    } while (current_half_edge != v->halfedge());
+
+    return h_edges;
+}
+
 /*
     This method should collapse the given edge and return an iterator to
     the new vertex created by the collapse.
@@ -57,8 +77,45 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_edge(Halfedge_Mesh::E
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
 
     (void)e;
-    // TODO: required
-    return std::nullopt;
+    // TODO: handle parallel edge collapse issue
+    VertexRef v1 = e->halfedge()->vertex();
+    VertexRef v2 = e->halfedge()->twin()->vertex();
+    VertexRef v3 = new_vertex();
+    v3->pos = (v1->pos + v2->pos) / 2;
+
+    // change the half edges from v1 and v2
+    auto edges_v1 = get_all_half_edges_of_vertex(v1);
+    auto edges_v2 = get_all_half_edges_of_vertex(v2);
+    std::vector<Halfedge_Mesh::HalfedgeRef> all_half_edges;
+    all_half_edges.reserve(edges_v1.size() + edges_v2.size()); // preallocate memory
+    all_half_edges.insert(all_half_edges.end(), edges_v1.begin(), edges_v1.end());
+    all_half_edges.insert(all_half_edges.end(), edges_v2.begin(), edges_v2.end());
+
+    for (auto halfedge: all_half_edges)
+        halfedge->vertex() = v3;
+    v3->halfedge() = all_half_edges[0];
+
+    // collapse overlapping edges
+
+    // remove the collapsed edge
+    HalfedgeRef h1 = e->halfedge();
+    do {
+        h1 = h1->next();
+    } while (h1->next() != e->halfedge());
+    HalfedgeRef h2 = e->halfedge()->twin();
+    do {
+        h2 = h2->next();
+    } while (h2->next() != e->halfedge()->twin());
+    h1->next() = e->halfedge()->next();
+    h2->next() = e->halfedge()->twin()->next();    
+
+    Halfedge_Mesh::erase(e);
+    Halfedge_Mesh::erase(e->halfedge());
+    Halfedge_Mesh::erase(e->halfedge()->twin());
+    Halfedge_Mesh::erase(v1);
+    Halfedge_Mesh::erase(v2);
+
+    return v3;
 }
 
 /*
