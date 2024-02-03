@@ -87,33 +87,20 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
     // return immediately if on boundary
     if(f0->is_boundary() || f1->is_boundary())
     {
-        printf("skipping split because on boundary\n");
+        printf("skipping flip because on boundary\n");
         return std::nullopt;
     }
 
-    // HALFEDGES
-    HalfedgeRef h0 = e->halfedge();
-    HalfedgeRef h1 = h0->next();
-    HalfedgeRef h2 = h1->next();
-    HalfedgeRef h3 = h0->twin();
-    HalfedgeRef h4 = h3->next();
-    HalfedgeRef h5 = h4->next();
-    HalfedgeRef h6 = h1->twin();
-    HalfedgeRef h7 = h2->twin();
-    HalfedgeRef h8 = h4->twin();
-    HalfedgeRef h9 = h5->twin();
+    // HALF EDGES
+    HalfedgeRef h0 = e->halfedge(), h1 = h0->next(), h2 = h1->next();           // triangle 1
+    HalfedgeRef h3 = h0->twin(), h4 = h3->next(), h5 = h4->next();              // triangle 2
+    HalfedgeRef h6 = h1->twin(), h7 = h2->twin(), h8 = h4->twin(), h9 = h5->twin(); // outside
 
     // VERTICES
-    VertexRef v0 = h0->vertex();
-    VertexRef v1 = h3->vertex();
-    VertexRef v2 = h8->vertex();
-    VertexRef v3 = h6->vertex();
+    VertexRef v0 = h0->vertex(), v1 = h3->vertex(), v2 = h8->vertex(), v3 = h6->vertex();
 
     // EDGES
-    EdgeRef e1 = h5->edge();
-    EdgeRef e2 = h4->edge();
-    EdgeRef e3 = h2->edge();
-    EdgeRef e4 = h1->edge();
+    EdgeRef e1 = h5->edge(), e2 = h4->edge(), e3 = h2->edge(), e4 = h1->edge();
 
     h0->next() = h1;
     h0->twin() = h3;
@@ -200,7 +187,81 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::split_edge(Halfedge_Mesh:
 
     // TODO: required
     // left side surface vertices
-    return std::nullopt;
+    FaceRef f0 = e->halfedge()->face();
+    FaceRef f1 = e->halfedge()->twin()->face();
+
+    // return immediately if on boundary
+    if(f0->is_boundary() || f1->is_boundary())
+    {
+        printf("skipping split because on boundary\n");
+        return std::nullopt;
+    }
+
+    // ---- Existing elements ----
+    HalfedgeRef h0 = e->halfedge(), h1 = h0->next(), h2 = h1->next();           // triangle 1
+    HalfedgeRef h3 = h0->twin(), h4 = h3->next(), h5 = h4->next();              // triangle 2
+    HalfedgeRef h6 = h1->twin(), h7 = h2->twin(), h8 = h4->twin(), h9 = h5->twin(); // outside
+
+    VertexRef v0 = h0->vertex(), v1 = h3->vertex(), v2 = h8->vertex(), v3 = h6->vertex();
+
+    EdgeRef e1 = h5->edge(), e2 = h4->edge(), e3 = h2->edge(), e4 = h1->edge();
+
+    // ---- ALLOCATION ----
+    HalfedgeRef h10 = Halfedge_Mesh::new_halfedge();
+    HalfedgeRef h11 = Halfedge_Mesh::new_halfedge();
+    HalfedgeRef h12 = Halfedge_Mesh::new_halfedge();
+    HalfedgeRef h13 = Halfedge_Mesh::new_halfedge();
+    HalfedgeRef h14 = Halfedge_Mesh::new_halfedge();
+    HalfedgeRef h15 = Halfedge_Mesh::new_halfedge();
+
+    FaceRef f2 = Halfedge_Mesh::new_face(), f3 = Halfedge_Mesh::new_face();
+
+    VertexRef v4 = Halfedge_Mesh::new_vertex();
+
+    EdgeRef e5 = Halfedge_Mesh::new_edge(), e6 = Halfedge_Mesh::new_edge(), e7 = Halfedge_Mesh::new_edge();
+
+    // ---- Assignments ----
+    // HalfedgeRef next, HalfedgeRef twin, VertexRef vertex, EdgeRef edge, FaceRef face
+    h0->set_neighbors(h1,   h3,  v4, e,  f0); //
+    h1->set_neighbors(h10,  h6,  v1, e4, f0);
+    h2->set_neighbors(h12,  h7,  v3, e3, f2);
+    h3->set_neighbors(h11,  h0,  v1, e,  f1);
+    h4->set_neighbors(h14,  h8,  v0, e2, f3);
+    h5->set_neighbors(h3,   h9,  v2, e1, f1);
+    h6->set_neighbors(h9,   h1,  v3, e4, h6->face());
+    h7->set_neighbors(h6,   h2,  v0, e3, h7->face());
+    h8->set_neighbors(h7,   h4,  v2, e2, h8->face());
+    h9->set_neighbors(h8,   h5,  v1, e1, h9->face());
+    h10->set_neighbors(h0,  h15, v3, e5, f0);
+    h11->set_neighbors(h5,  h14, v4, e6, f1); //
+    h12->set_neighbors(h15, h13, v0, e7, f2);
+    h13->set_neighbors(h4,  h12, v4, e7, f3); //
+    h14->set_neighbors(h13, h11, v2, e6, f3);
+    h15->set_neighbors(h2,  h10, v4, e5, f2); //
+
+    // edges
+    e->halfedge() = h0;
+    e1->halfedge() = h9;
+    e2->halfedge() = h8;
+    e3->halfedge() = h7;
+    e4->halfedge() = h6;
+    e5->halfedge() = h10;
+    e6->halfedge() = h11;
+    e7->halfedge() = h12;
+
+    // faces
+    f0->halfedge() = h0;
+    f1->halfedge() = h11;
+    f2->halfedge() = h12;
+    f3->halfedge() = h13;
+
+    // vertices
+    v0->halfedge() = h12;
+    v1->halfedge() = h3;
+    v2->halfedge() = h14;
+    v3->halfedge() = h10;
+    v4->halfedge() = h11;
+    return v4;
 }
 
 /* Note on the beveling process:
