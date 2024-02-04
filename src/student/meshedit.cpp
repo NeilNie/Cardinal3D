@@ -76,7 +76,6 @@ std::vector<Halfedge_Mesh::HalfedgeRef> get_all_half_edges_of_vertex(Halfedge_Me
 */
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
 
-    (void)e;
     // TODO: handle parallel edge collapse issue
     VertexRef v1 = e->halfedge()->vertex();
     VertexRef v2 = e->halfedge()->twin()->vertex();
@@ -134,8 +133,6 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_face(Halfedge_Me
 */
 std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::EdgeRef e) {
 
-    (void)e;
-
     // TODO: required
     // Get the two faces
     FaceRef f0 = e->halfedge()->face();
@@ -159,65 +156,16 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
     // EDGES
     EdgeRef e1 = h5->edge(), e2 = h4->edge(), e3 = h2->edge(), e4 = h1->edge();
 
-    h0->next() = h1;
-    h0->twin() = h3;
-    h0->vertex() = v2;
-    h0->edge() = e;
-    h0->face() = f0;
-
-    h1->next() = h2;
-    h1->twin() = h7;
-    h1->vertex() = v3;
-    h1->edge() = e3;
-    h1->face() = f0;
-
-    h2->next() = h0;
-    h2->twin() = h8;
-    h2->vertex() = v0;
-    h2->edge() = e2;
-    h2->face() = f0;
-
-    h3->next() = h4;
-    h3->twin() = h0;
-    h3->vertex() = v3;
-    h3->edge() = e;
-    h3->face() = f1;
-
-    h4->next() = h5;
-    h4->twin() = h9;
-    h4->vertex() = v2;
-    h4->edge() = e1;
-    h4->face() = f1;
-
-    h5->next() = h3;
-    h5->twin() = h6;
-    h5->vertex() = v1;
-    h5->edge() = e4;
-    h5->face() = f1;
-
-    h6->next() = h6->next();
-    h6->twin() = h5;
-    h6->vertex() = v3;
-    h6->edge() = e4;
-    h6->face() = h6->face();
-
-    h7->next() = h7->next();
-    h7->twin() = h1;
-    h7->vertex() = v0;
-    h7->edge() = e3;
-    h7->face() = h7->face();
-
-    h8->next() = h8->next();
-    h8->twin() = h2;
-    h8->vertex() = v2;
-    h8->edge() = e2;
-    h8->face() = h8->face();
-
-    h9->next() = h9->next(); // didn't change, but set it anyway!
-    h9->twin() = h4;
-    h9->vertex() = v1;
-    h9->edge() = e1;
-    h9->face() = h9->face(); // didn't change, but set it anyway!
+    h0->set_neighbors(h1, h3, v2, e, f0);
+    h1->set_neighbors(h2, h7, v3, e3, f0);
+    h2->set_neighbors(h0, h8, v0, e2, f0);
+    h3->set_neighbors(h4, h0, v3, e, f1);
+    h4->set_neighbors(h5, h9, v2, e1, f1);
+    h5->set_neighbors(h3, h6, v1, e4, f1);
+    h6->set_neighbors(h6->next(), h5, v3, e4, h6->face());
+    h7->set_neighbors(h7->next(), h1, v0, e3, h7->face());
+    h8->set_neighbors(h8->next(), h2, v2, e2, h8->face());
+    h9->set_neighbors(h9->next(), h4, v1, e1, h9->face());
 
     v0->halfedge() = h2;
     v1->halfedge() = h5;
@@ -379,6 +327,39 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_edge(Halfedge_Mesh::E
     return std::nullopt;
 }
 
+std::vector<Halfedge_Mesh::VertexRef> collect_vertices(Halfedge_Mesh::FaceRef f) {
+
+    std::vector<Halfedge_Mesh::VertexRef> vertices;
+    Halfedge_Mesh::HalfedgeRef h = f->halfedge();
+    do {
+        vertices.push_back(h->vertex());
+        h = h->next();
+    } while (h != f->halfedge());
+    return vertices;
+}
+
+Halfedge_Mesh::HalfedgeRef half_edge_from_vertex(Halfedge_Mesh::FaceRef f, Halfedge_Mesh::VertexRef v) {
+
+    Halfedge_Mesh::HalfedgeRef h = f->halfedge();
+    do {
+        if (h->vertex()->id() == v->id())
+            break;
+        h = h->next();
+    } while (h != f->halfedge());
+    return h;
+}
+
+Halfedge_Mesh::HalfedgeRef half_edge_to_vertex_on_face(Halfedge_Mesh::FaceRef f, Halfedge_Mesh::VertexRef v) {
+
+    Halfedge_Mesh::HalfedgeRef h = f->halfedge();
+    do {
+        if (h->next()->vertex()->id() == v->id())
+            break;
+        h = h->next();
+    } while (h != f->halfedge());
+    return h;
+}
+
 /*
     This method should replace the face f with an additional, inset face
     (and ring of faces around it), corresponding to a bevel operation. It
@@ -393,9 +374,68 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_face(Halfedge_Mesh::F
     // Reminder: You should set the positions of new vertices (v->pos) to be exactly
     // the same as wherever they "started from."
 
-    (void)f;
-    // TODO: required
-    return std::nullopt;
+    Halfedge_Mesh::FaceRef new_face = Halfedge_Mesh::new_face();
+    auto og_vertices = collect_vertices(f);
+
+    // for every original vertex, we need to create the following 8 new elements
+    // 1. a new face
+    // 2. a new vertex
+    // 3. a new edge from old vertex to new vertex
+    // 4. a new edge from new vertex to next Vertex
+    // 5-8. half edge for each of the two new edges
+    std::vector<Halfedge_Mesh::FaceRef> faces;
+    std::vector<Halfedge_Mesh::VertexRef> new_vertices;
+    std::vector<Halfedge_Mesh::EdgeRef> edges_from_old;
+    std::vector<Halfedge_Mesh::EdgeRef> edges_to_next_v;
+    std::vector<Halfedge_Mesh::HalfedgeRef> he_v_to_old;
+    std::vector<Halfedge_Mesh::HalfedgeRef> he_v_to_next;
+    std::vector<Halfedge_Mesh::HalfedgeRef> he_v_from_old;
+    std::vector<Halfedge_Mesh::HalfedgeRef> he_v_from_next;
+
+    for (size_t i = 0; i < og_vertices.size(); i++) {
+        faces.push_back(Halfedge_Mesh::new_face());
+        new_vertices.push_back(Halfedge_Mesh::new_vertex());
+        edges_from_old.push_back(Halfedge_Mesh::new_edge());
+        edges_to_next_v.push_back(Halfedge_Mesh::new_edge());
+        he_v_to_old.push_back(Halfedge_Mesh::new_halfedge());
+        he_v_to_next.push_back(Halfedge_Mesh::new_halfedge());
+        he_v_from_old.push_back(Halfedge_Mesh::new_halfedge());
+        he_v_from_next.push_back(Halfedge_Mesh::new_halfedge());
+    }
+
+    for (size_t i = 0; i < og_vertices.size(); i++) {
+
+        size_t next_i = i + 1;
+
+        Halfedge_Mesh::FaceRef face = faces[i];
+        Halfedge_Mesh::VertexRef v = new_vertices[i];
+        Halfedge_Mesh::EdgeRef edge_to_old = edges_from_old[i];
+        Halfedge_Mesh::EdgeRef edge_to_next = edges_to_next_v[i];
+        Halfedge_Mesh::HalfedgeRef h_v_to_old = he_v_to_old[i];
+        Halfedge_Mesh::HalfedgeRef h_v_to_next = he_v_to_next[i];
+        Halfedge_Mesh::HalfedgeRef h_v_from_old = he_v_from_old[i];
+        Halfedge_Mesh::HalfedgeRef h_v_from_next = he_v_from_next[i];
+
+        // TODO: find edge before and after
+        auto v_old_he = half_edge_from_vertex(f, og_vertices[i]);
+        auto v_old_to = half_edge_to_vertex_on_face(f, og_vertices[i]);
+        auto n_half_edge = he_v_to_next[next_i];
+        auto n_vertex = new_vertices[next_i];
+
+        //                              next            twin            vertex          edge            face
+        h_v_to_old->set_neighbors(      v_old_he,       h_v_to_next,    v,              edge_to_old,    v_old_he->face());
+        h_v_from_old->set_neighbors(    h_v_from_next,  h_v_to_next,    og_vertices[i], edge_to_old,    v_old_to->face());
+        h_v_to_next->set_neighbors(     n_half_edge,    h_v_from_next,  v,              edge_to_next,   new_face);
+        h_v_from_next->set_neighbors(   h_v_to_old,     h_v_to_next,    n_vertex,       edge_to_next,   f);
+
+        edge_to_old->halfedge() = h_v_to_old;
+        edge_to_next->halfedge() = h_v_to_next;
+
+        v->halfedge() = h_v_to_next;
+
+        face->halfedge() = h_v_to_old;
+    }
+    return new_face;
 }
 
 /*
