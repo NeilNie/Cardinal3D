@@ -696,6 +696,35 @@ void Halfedge_Mesh::linear_subdivide_positions() {
     // For each face, assign the centroid (i.e., arithmetic mean)
     // of the original vertex positions to Face::new_pos. Note
     // that in general, NOT all faces will be triangles!
+
+    for (auto v = vertices_begin(); v != vertices_end(); v++)
+        v->new_pos = v->pos;
+
+    for (auto e = edges_begin(); e != edges_end(); e++)
+        e->new_pos = (e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 2.0;
+
+    for (auto f = faces_begin(); f != faces_end(); f++) {
+        float count = 0.f;
+        Vec3 vec = Vec3();
+        HalfedgeRef h = f->halfedge();
+        do {
+            vec += h->vertex()->pos;
+            count += 1;
+            h = h->next();
+        } while (h != f->halfedge());
+        f->new_pos = vec / count;
+    }
+}
+
+size_t degrees(Halfedge_Mesh::VertexRef v) {
+
+    size_t degrees = 0;
+    Halfedge_Mesh::HalfedgeRef h = v->halfedge();
+    do {
+        degrees += 1;
+        h = h->twin()->next();
+    } while (h != v->halfedge());
+    return degrees;
 }
 
 /*
@@ -717,10 +746,41 @@ void Halfedge_Mesh::catmullclark_subdivide_positions() {
     // rules. (These rules are outlined in the Developer Manual.)
 
     // Faces
+    for (auto f = faces_begin(); f != faces_end(); f++) {
+        float count = 0.f;
+        Vec3 vec = Vec3();
+        HalfedgeRef h = f->halfedge();
+        do {
+            vec += h->vertex()->pos;
+            count += 1;
+            h = h->next();
+        } while (h != f->halfedge());
+        f->new_pos = vec / count;
+    }
 
     // Edges
+    for (auto e = edges_begin(); e != edges_end(); e++)
+        e->new_pos = (e->halfedge()->face()->new_pos + e->halfedge()->twin()->face()->new_pos + 
+                      e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 4.0;
 
     // Vertices
+    for (auto v = vertices_begin(); v != vertices_end(); v++) {
+        
+        float n = (float)degrees(v);
+        Vec3 Q = Vec3(), R = Vec3(), S = Vec3();
+        
+        Halfedge_Mesh::HalfedgeRef h = v->halfedge();
+        do {
+            Q += h->face()->new_pos;
+            R += (h->vertex()->pos + h->twin()->vertex()->pos) / 2.0;
+            h = h->twin()->next();
+        } while (h != v->halfedge());
+
+        Q /= n;
+        R /= n;
+
+        v->new_pos = (Q + 2 * R + (n - 3) * v->pos) / n;
+    }
 }
 
 /*
