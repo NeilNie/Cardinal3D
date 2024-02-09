@@ -860,6 +860,18 @@ bool Halfedge_Mesh::isotropic_remesh() {
     return false;
 }
 
+
+void print_matrix(Mat4 mat) {
+
+    printf("%f, %f, %f, %f\n%f, %f, %f, %f\n%f, %f, %f, %f\n%f, %f, %f, %f\n", 
+    mat[0][0], mat[1][0], mat[2][0], mat[3][0],
+    mat[0][1], mat[1][1], mat[2][1], mat[3][1],
+    mat[0][2], mat[1][2], mat[2][2], mat[3][2],
+    mat[0][3], mat[1][3], mat[2][3], mat[3][3]
+    );
+}
+
+
 /* Helper type for quadric simplification */
 struct Edge_Record {
     Edge_Record() {
@@ -875,6 +887,25 @@ struct Edge_Record {
         //    Edge_Record::optimal.
         // -> Also store the cost associated with collapsing this edge in
         //    Edge_Record::cost.
+
+        Mat4 endpoints_sum = vertex_quadrics[e->halfedge()->vertex()] + vertex_quadrics[e->halfedge()->twin()->vertex()];
+
+        // Mat4 A = Mat4(  Vec4(endpoints_sum[0][0], endpoints_sum[0][1], endpoints_sum[0][2], 0.f),
+        //                 Vec4(endpoints_sum[1][0], endpoints_sum[1][1], endpoints_sum[1][2], 0.f),
+        //                 Vec4(endpoints_sum[2][0], endpoints_sum[2][1], endpoints_sum[2][2], 0.f),
+        //                 Vec4(0.0f, 0.f, 0.f, 1.f));
+
+        // Vec4 b = Vec4(-endpoints_sum[2][0], -endpoints_sum[2][1], -endpoints_sum[2][2], 0.f);  // computed by extracting minus the upper-right 3x1 column from the same matrix
+
+        // Mat4 a_inverse = A.inverse();
+        // // check if A inverse is NaN
+
+        // Vec4 x_ = a_inverse * b; // solve Ax = b for x by hitting both sides with the inverse of A
+
+        // this->optimal = Vec3(x_[0], x_[1], x_[2]);
+        this->optimal = (e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 2;
+        this->edge = e;
+        this->cost = dot(this->optimal, endpoints_sum * this->optimal);
     }
     Halfedge_Mesh::EdgeRef edge;
     Vec3 optimal;
@@ -967,6 +998,13 @@ template<class T> struct PQueue {
     std::set<T> queue;
 };
 
+
+Vec3 face_normal(Halfedge_Mesh::FaceRef f) {
+    auto v1 = f->halfedge()->vertex()->pos - f->halfedge()->twin()->vertex()->pos;
+    auto v2 = f->halfedge()->next()->vertex()->pos - f->halfedge()->next()->twin()->vertex()->pos;
+    return cross(v1, v2).normalize();
+}
+
 /*
     Mesh simplification. Note that this function returns success in a similar
     manner to the local operations, except with only a boolean value.
@@ -980,20 +1018,7 @@ bool Halfedge_Mesh::simplify() {
     std::unordered_map<EdgeRef, Edge_Record> edge_records;
     PQueue<Edge_Record> edge_queue;
 
-    // Compute initial quadrics for each face by simply writing the plane equation
-    // for the face in homogeneous coordinates. These quadrics should be stored
-    // in face_quadrics
-    // -> Compute an initial quadric for each vertex as the sum of the quadrics
-    //    associated with the incident faces, storing it in vertex_quadrics
-    // -> Build a priority queue of edges according to their quadric error cost,
-    //    i.e., by building an Edge_Record for each edge and sticking it in the
-    //    queue. You may want to use the above PQueue<Edge_Record> for this.
-    // -> Until we reach the target edge budget, collapse the best edge. Remember
-    //    to remove from the queue any edge that touches the collapsing edge
-    //    BEFORE it gets collapsed, and add back into the queue any edge touching
-    //    the collapsed vertex AFTER it's been collapsed. Also remember to assign
-    //    a quadric to the collapsed vertex, and to pop the collapsed edge off the
-    //    top of the queue.
+    // TODO: check if the mesh only contains triangles
 
     // Note: if you erase elements in a local operation, they will not be actually deleted
     // until do_erase or validate are called. This is to facilitate checking
@@ -1001,6 +1026,89 @@ bool Halfedge_Mesh::simplify() {
     // The rest of the codebase will automatically call validate() after each op,
     // but here simply calling collapse_edge() will not erase the elements.
     // You should use collapse_edge_erase() instead for the desired behavior.
+
+    // Compute quadrics for each face by simply writing the plane equation for that face in homogeneous coordinates, 
+    // and building the corresponding quadric matrix using outer(). This matrix should be stored in the yet-unmentioned
+    // dictionary face_quadrics.
+
+    // Compute an initial quadric for each vertex by adding up the quadrics at all the faces touching that vertex. 
+    // This matrix should be stored in vertex_quadrics. (Note that these quadrics must be updated as edges are collapsed.)
+
+    // For each edge, create an Edge_Record, insert it into the edge_records dictionary, and add it to one global 
+    // PQueue<Edge_Record> queue.
+
+    // Until a target number of triangles is reached, collapse the best/cheapest edge (as determined by the priority queue) 
+    // and set the quadric at the new vertex to the sum of the quadrics at the endpoints of the original edge. 
+    // You will also have to update the cost of any edge connected to this vertex.
+
+    // faces
+    for (auto f = faces_begin(); f != faces_end(); f++) {
+        auto normal = face_normal(f);
+        float d = - dot(normal, f->halfedge()->vertex()->pos);
+        face_quadrics[f] = outer(Vec4(normal, d), Vec4(normal, d));
+    }
+
+    // vertices
+    for (auto v = vertices_begin(); v != vertices_end(); v++) {
+        Mat4 sum = Mat4::Zero;
+        Halfedge_Mesh::HalfedgeRef h = v->halfedge();
+        do {
+            sum += face_quadrics[h->face()];
+            h = h->twin()->next();
+        } while (h != v->halfedge());
+        vertex_quadrics[v] = sum;
+    }
+
+    // edges
+    for (auto e = edges_begin(); e != edges_end(); e++) {
+        Edge_Record record = Edge_Record(vertex_quadrics, e);
+        edge_records[e] = record;
+        edge_queue.insert(record);
+    }
+
+    int count = 0;
+
+    // bool stop = true;
+    while (count < 100) {
+
+        // Get the cheapest edge from the queue.
+        Edge_Record best_edge = edge_queue.top();
+
+        // Remove the cheapest edge from the queue by calling pop().
+        edge_queue.pop();
+
+        // Compute the new quadric by summing the quadrics at its two endpoints.
+        Mat4 new_quadrics = vertex_quadrics[best_edge.edge->halfedge()->vertex()] + vertex_quadrics[best_edge.edge->halfedge()->twin()->vertex()];
+
+        // Remove any edge touching either of its endpoints from the queue.
+        Halfedge_Mesh::HalfedgeRef h = best_edge.edge->halfedge();
+        do {
+            edge_queue.remove(Edge_Record(vertex_quadrics, h->edge()));
+            h = h->twin()->next();
+        } while (h != best_edge.edge->halfedge());
+
+        Halfedge_Mesh::HalfedgeRef h2 = best_edge.edge->halfedge()->twin();
+        do {
+            edge_queue.remove(Edge_Record(vertex_quadrics, h2->edge()));
+            h2 = h2->twin()->next();
+        } while (h2 != best_edge.edge->halfedge()->twin());
+
+        // Collapse the edge.
+        auto new_vertex = collapse_edge_erase(best_edge.edge);
+
+        // Set the quadric of the new vertex to the quadric computed in Step 3.
+        vertex_quadrics[new_vertex.value()] = new_quadrics;
+
+        // Insert any edge touching the new vertex into the queue, creating new edge records for each of them.
+        Halfedge_Mesh::HalfedgeRef h_ = new_vertex.value()->halfedge();
+        do {
+            edge_queue.insert(Edge_Record(vertex_quadrics, h_->edge()));
+            h_ = h_->twin()->next();
+        } while (h_ != new_vertex.value()->halfedge());
+
+        count += 1;
+        break;
+    }
 
     return false;
 }
