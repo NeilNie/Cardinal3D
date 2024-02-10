@@ -70,11 +70,30 @@ std::vector<Halfedge_Mesh::HalfedgeRef> get_all_half_edges_of_vertex(Halfedge_Me
     return h_edges;
 }
 
+size_t num_of_edges(Halfedge_Mesh::FaceRef f) {
+
+    auto current_half_edge = f->halfedge();
+    size_t counter = 0;
+    do {
+        counter += 1;
+        current_half_edge = current_half_edge->next();
+    } while (current_half_edge != f->halfedge());
+
+    return counter;
+}
+
 /*
     This method should collapse the given edge and return an iterator to
     the new vertex created by the collapse.
 */
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
+
+    // check if the operation is possible (if both faces have more than 3 edges)
+	// if(!e->halfedge()->face()->is_boundary() && !e->halfedge()->twin()->face()->is_boundary()) {
+    //     return std::nullopt;
+	// }
+
+    bool double_triangle = num_of_edges(e->halfedge()->face()) == 3 && num_of_edges(e->halfedge()->twin()->face()) == 3;
 
     // TODO: handle parallel edge collapse issue
     VertexRef v1 = e->halfedge()->vertex();
@@ -82,11 +101,11 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     VertexRef v3 = new_vertex();
     v3->pos = (v1->pos + v2->pos) / 2;
 
-    // change the half edges from v1 and v2
+    // reassign halfedges for all vertex v1 and v2
     auto edges_v1 = get_all_half_edges_of_vertex(v1);
     auto edges_v2 = get_all_half_edges_of_vertex(v2);
     std::vector<Halfedge_Mesh::HalfedgeRef> all_half_edges;
-    all_half_edges.reserve(edges_v1.size() + edges_v2.size()); // preallocate memory
+    all_half_edges.reserve(edges_v1.size() + edges_v2.size());
     all_half_edges.insert(all_half_edges.end(), edges_v1.begin(), edges_v1.end());
     all_half_edges.insert(all_half_edges.end(), edges_v2.begin(), edges_v2.end());
 
@@ -95,18 +114,87 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     v3->halfedge() = all_half_edges[0];
 
     // collapse overlapping edges
+    if (double_triangle) {
 
-    // remove the collapsed edge
-    HalfedgeRef h1 = e->halfedge();
-    do {
-        h1 = h1->next();
-    } while (h1->next() != e->halfedge());
-    HalfedgeRef h2 = e->halfedge()->twin();
-    do {
-        h2 = h2->next();
-    } while (h2->next() != e->halfedge()->twin());
-    h1->next() = e->halfedge()->next();
-    h2->next() = e->halfedge()->twin()->next();    
+        printf("trying to handle triangle\n");
+
+        auto h1 = e->halfedge();
+
+        HalfedgeRef h7 = h1->next()->twin();
+        HalfedgeRef h10 = h1->next()->next()->twin();
+
+        h7->twin() = h10;
+        h10->twin() = h7;
+        h10->edge() = h7->edge();
+        h1->next()->next()->vertex()->halfedge() = h10;
+
+        erase(h10->edge());
+        erase(h1->next());
+        erase(h1->next()->next());
+        erase(h1->face());
+
+        auto h2 = e->halfedge()->twin();
+        HalfedgeRef h9 = h1->twin()->next()->twin();
+        HalfedgeRef h8 = h1->twin()->next()->next()->twin();
+
+        h9->twin() = h8;
+        h8->twin() = h9;
+        h9->edge() = h8->edge();
+        h2->next()->next()->vertex()->halfedge() = h9;
+
+        erase(h9->edge());
+        erase(h2->next());
+        erase(h2->next()->next());
+        erase(h2->face());
+
+        printf("break\n");
+
+        // printf("last twin %d\n", h1->next()->next()->twin()->id());
+        // printf("first twin %d\n", h1->next()->twin()->id());
+
+        // auto tmp = h1->next()->next()->twin();
+        // h1->next()->next()->twin() = h1->next()->twin();
+        // h1->next()->twin() = tmp;
+        // h1->next()->next()->edge()->halfedge() = h1->next()->twin();
+
+        // erase(h1->next()->next());
+        // erase(h1->next()->edge());
+        // erase(h1->next());
+        // erase(h1->face());
+
+        // printf("-\n");
+        // printf("last twin %d\n", h1->next()->next()->twin()->id());
+        // printf("first twin %d\n", h1->next()->twin()->id());
+
+        // auto h2 = e->halfedge()->twin();
+
+        // auto tmp2 = h2->next()->next()->twin();
+        // h2->next()->next()->twin() = h2->next()->twin();
+        // h2->next()->twin() = tmp2;
+        // h2->next()->next()->edge()->halfedge() = h2->next()->twin();
+
+        // erase(h2->next()->next());
+        // erase(h2->next()->edge());
+        // erase(h2->next());
+        // erase(h2->face());
+
+    } else {
+        // reassign faces
+        e->halfedge()->face()->halfedge() = e->halfedge()->next();
+        e->halfedge()->twin()->face()->halfedge() = e->halfedge()->twin()->next();
+
+        // remove the collapsed edge
+        HalfedgeRef h1 = e->halfedge();
+        do {
+            h1 = h1->next();
+        } while (h1->next() != e->halfedge());
+        HalfedgeRef h2 = e->halfedge()->twin();
+        do {
+            h2 = h2->next();
+        } while (h2->next() != e->halfedge()->twin());
+        h1->next() = e->halfedge()->next();
+        h2->next() = e->halfedge()->twin()->next();
+    }
 
     Halfedge_Mesh::erase(e);
     Halfedge_Mesh::erase(e->halfedge());
@@ -1042,7 +1130,9 @@ bool Halfedge_Mesh::simplify() {
     // You will also have to update the cost of any edge connected to this vertex.
 
     // faces
+    size_t face_count = 0;
     for (auto f = faces_begin(); f != faces_end(); f++) {
+        face_count += 1;
         auto normal = face_normal(f);
         float d = - dot(normal, f->halfedge()->vertex()->pos);
         face_quadrics[f] = outer(Vec4(normal, d), Vec4(normal, d));
@@ -1066,13 +1156,18 @@ bool Halfedge_Mesh::simplify() {
         edge_queue.insert(record);
     }
 
-    int count = 0;
+    size_t count = face_count;
 
+    printf("map size: %zu\n", edge_records.size());
+
+    // TODO: preserve manifoldness
     // bool stop = true;
-    while (count < 100) {
+    while (count > face_count / 4 && edge_queue.size() > 0) {
 
         // Get the cheapest edge from the queue.
         Edge_Record best_edge = edge_queue.top();
+
+        printf("queue size: %zu, picking edge %d\n", edge_queue.size(), best_edge.edge->id());
 
         // Remove the cheapest edge from the queue by calling pop().
         edge_queue.pop();
@@ -1084,31 +1179,40 @@ bool Halfedge_Mesh::simplify() {
         Halfedge_Mesh::HalfedgeRef h = best_edge.edge->halfedge();
         do {
             edge_queue.remove(Edge_Record(vertex_quadrics, h->edge()));
+            printf("removing edges: %d\n", h->edge()->id());
             h = h->twin()->next();
         } while (h != best_edge.edge->halfedge());
 
         Halfedge_Mesh::HalfedgeRef h2 = best_edge.edge->halfedge()->twin();
         do {
             edge_queue.remove(Edge_Record(vertex_quadrics, h2->edge()));
+            printf("removing edges: %d\n", h2->edge()->id());
             h2 = h2->twin()->next();
         } while (h2 != best_edge.edge->halfedge()->twin());
 
         // Collapse the edge.
-        auto new_vertex = collapse_edge_erase(best_edge.edge);
+        if (auto new_vertex = collapse_edge_erase(best_edge.edge)) {
+            // Set the quadric of the new vertex to the quadric computed in Step 3.
+            vertex_quadrics[new_vertex.value()] = new_quadrics;
 
-        // Set the quadric of the new vertex to the quadric computed in Step 3.
-        vertex_quadrics[new_vertex.value()] = new_quadrics;
+            // // Insert any edge touching the new vertex into the queue, creating new edge records for each of them.
+            // Halfedge_Mesh::HalfedgeRef h_ = new_vertex.value()->halfedge();
+            // do {
+            //     edge_queue.insert(Edge_Record(vertex_quadrics, h_->edge()));
+            //     h_ = h_->twin()->next();
+            // } while (h_ != new_vertex.value()->halfedge());
 
-        // Insert any edge touching the new vertex into the queue, creating new edge records for each of them.
-        Halfedge_Mesh::HalfedgeRef h_ = new_vertex.value()->halfedge();
-        do {
-            edge_queue.insert(Edge_Record(vertex_quadrics, h_->edge()));
-            h_ = h_->twin()->next();
-        } while (h_ != new_vertex.value()->halfedge());
+        }
 
-        count += 1;
+        count = 0;
+        for (auto f = faces_begin(); f != faces_end(); f++)
+            count += 1;
+        printf("one cycle\n");
+
         break;
     }
 
-    return false;
+    printf("total count left face count: %zu\n", count);
+
+    return true;
 }
