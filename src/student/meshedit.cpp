@@ -110,17 +110,78 @@ void reassign_erase_for_collapse_edge(Halfedge_Mesh* mesh, Halfedge_Mesh::Halfed
     mesh->erase(e1);
 }
 
+bool can_collapse_edge(Halfedge_Mesh::EdgeRef e) {
+
+    // boundary check
+    if (e->on_boundary())
+        return false;
+
+    // =======
+    auto h0 = e->halfedge();
+    auto h2 = h0->next();
+    auto h4 = h2->next();
+    auto h1 = h0->twin();
+    auto h3 = h1->next();
+    auto h5 = h3->next();
+    auto e2 = h2->edge();
+    auto e4 = h4->edge();
+    auto e1 = h5->edge();
+    auto e3 = h3->edge();
+
+    // two cases:
+    // the two vertices v1 and v2 are the same
+    // or the two triangles are on top of each other
+    if (e->halfedge()->vertex() == e->halfedge()->twin()->vertex() || e3 == e4 || e1 == e2) {
+        return false;
+    }
+
+    // get the neighboring vertices of v0
+    auto v0_h = h0; 
+    std::set<Halfedge_Mesh::VertexRef> v0_neighbors;
+    do {
+        v0_neighbors.insert(v0_h->twin()->vertex());
+        v0_h = v0_h->twin()->next();
+    } while (v0_h != h0);
+
+    // get the neighboring vertices for v1
+    auto v1_h = h1; 
+    std::set<Halfedge_Mesh::VertexRef> v1_neighbors;
+    do {
+        v1_neighbors.insert(v1_h->twin()->vertex());
+        v1_h = v1_h->twin()->next();
+    } while (v1_h != h1);
+
+    std::set<Halfedge_Mesh::VertexRef> shared_neighbors;
+    std::set_intersection(
+        v0_neighbors.begin(), v0_neighbors.end(),
+        v1_neighbors.begin(), v1_neighbors.end(),
+        std::inserter(shared_neighbors, shared_neighbors.begin()));
+
+    // counting the joint neighbour vertices of the two merging vertices (there must be exactly two)
+    if (shared_neighbors.size() != 2) {
+        return false;
+    }
+
+    return true;
+}
+
 /*
     This method should collapse the given edge and return an iterator to
     the new vertex created by the collapse.
 */
+
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
+
+
+    if (!can_collapse_edge(e)) {
+        return std::nullopt;
+    }
 
     bool double_triangle = num_of_edges(e->halfedge()->face()) == 3 && num_of_edges(e->halfedge()->twin()->face()) == 3;
 
-    VertexRef v1 = e->halfedge()->vertex();
-    VertexRef v2 = e->halfedge()->twin()->vertex();
-    VertexRef v3 = new_vertex();
+    auto v1 = e->halfedge()->vertex();
+    auto v2 = e->halfedge()->twin()->vertex();
+    auto v3 = new_vertex();
     v3->pos = (v1->pos + v2->pos) / 2;
 
     // reassign halfedges for all vertex v1 and v2
@@ -612,11 +673,18 @@ void Halfedge_Mesh::bevel_face_positions(const std::vector<Vec3>& start_position
         h = h->next();
     } while(h != face->halfedge());
 
-    (void)new_halfedges;
-    (void)start_positions;
-    (void)face;
-    (void)tangent_offset;
-    (void)normal_offset;
+    int N = new_halfedges.size();
+
+    for(size_t i = 0; i < new_halfedges.size(); i++) {
+        Vec3 pi = start_positions[i]; // get the original vertex position corresponding to vertex i
+        // calculate tangent (the average of the directions to prev and next)
+        Vec3 prev_position = start_positions[(i + N - 1) % N];
+        Vec3 next_position = start_positions[(i + 1) % N];
+        Vec3 i_to_prev = (prev_position - pi).normalize();
+        Vec3 i_to_next = (next_position - pi).normalize();
+        Vec3 tangent = (i_to_prev + i_to_next) / (sqrt(2) / 2.0); // normalized
+        new_halfedges[i]->vertex()->pos = pi + normal_offset * face->normal() + tangent_offset * tangent;
+    }
 }
 
 
@@ -941,20 +1009,19 @@ struct Edge_Record {
 
         Mat4 endpoints_sum = vertex_quadrics[e->halfedge()->vertex()] + vertex_quadrics[e->halfedge()->twin()->vertex()];
 
-        // Mat4 A = Mat4(  Vec4(endpoints_sum[0][0], endpoints_sum[0][1], endpoints_sum[0][2], 0.f),
-        //                 Vec4(endpoints_sum[1][0], endpoints_sum[1][1], endpoints_sum[1][2], 0.f),
-        //                 Vec4(endpoints_sum[2][0], endpoints_sum[2][1], endpoints_sum[2][2], 0.f),
-        //                 Vec4(0.0f, 0.f, 0.f, 1.f));
+        Mat4 A = Mat4(  Vec4(endpoints_sum[0][0], endpoints_sum[0][1], endpoints_sum[0][2], 0.f),
+                        Vec4(endpoints_sum[1][0], endpoints_sum[1][1], endpoints_sum[1][2], 0.f),
+                        Vec4(endpoints_sum[2][0], endpoints_sum[2][1], endpoints_sum[2][2], 0.f),
+                        Vec4(0.0f, 0.f, 0.f, 1.f));
 
-        // Vec4 b = Vec4(-endpoints_sum[2][0], -endpoints_sum[2][1], -endpoints_sum[2][2], 0.f);  // computed by extracting minus the upper-right 3x1 column from the same matrix
+        Vec3 b = Vec3(-endpoints_sum[3][0], -endpoints_sum[3][1], -endpoints_sum[3][2]);  // computed by extracting minus the upper-right 3x1 column from the same matrix
 
-        // Mat4 a_inverse = A.inverse();
-        // // check if A inverse is NaN
+        Vec3 x_ = (e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 2;
+        if (fabs(1 - A.det()) > 1e-4) {
+            x_ = A.inverse() * b;
+        }
 
-        // Vec4 x_ = a_inverse * b; // solve Ax = b for x by hitting both sides with the inverse of A
-
-        // this->optimal = Vec3(x_[0], x_[1], x_[2]);
-        this->optimal = (e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 2;
+        this->optimal = x_;
         this->edge = e;
         this->cost = dot(this->optimal, endpoints_sum * this->optimal);
     }
@@ -1130,35 +1197,49 @@ bool Halfedge_Mesh::simplify() {
     // bool stop = true;
     while (count > face_count / 4 && edge_queue.size() > 0) {
 
+        for (auto f = faces_begin(); f != faces_end(); f++) {
+            int edge_count = 0;
+            Halfedge_Mesh::HalfedgeRef h = f->halfedge();
+            do {
+                h = h->next();
+                edge_count += 1;
+            } while (h != f->halfedge());
+            if (edge_count != 3) {
+                printf("not all faces are triangles! edge count: %d\n", edge_count);
+                triangulate();
+                break;
+            }
+        }
+
         // Get the cheapest edge from the queue.
-        Edge_Record best_edge = edge_queue.top();
+        EdgeRef best_edge = edge_queue.top().edge;
 
         printf("queue size: %zu, edge record size: %zu\n", edge_queue.size(), edge_records.size());
-        printf("picking edge %d\n", best_edge.edge->id());
+        printf("picking edge %d\n", best_edge->id());
 
         // Remove the cheapest edge from the queue by calling pop().
         edge_queue.pop();
 
         // Compute the new quadric by summing the quadrics at its two endpoints.
-        Mat4 new_quadrics = vertex_quadrics[best_edge.edge->halfedge()->vertex()] + vertex_quadrics[best_edge.edge->halfedge()->twin()->vertex()];
+        Mat4 new_quadrics = vertex_quadrics[best_edge->halfedge()->vertex()] + vertex_quadrics[best_edge->halfedge()->twin()->vertex()];
 
         // Remove any edge touching either of its endpoints from the queue.
-        Halfedge_Mesh::HalfedgeRef h = best_edge.edge->halfedge();
+        Halfedge_Mesh::HalfedgeRef h = best_edge->halfedge();
         do {
             edge_queue.remove(Edge_Record(vertex_quadrics, h->edge()));
             edge_records.erase(h->edge());
             h = h->twin()->next();
-        } while (h != best_edge.edge->halfedge());
+        } while (h != best_edge->halfedge());
 
-        Halfedge_Mesh::HalfedgeRef h2 = best_edge.edge->halfedge()->twin();
+        Halfedge_Mesh::HalfedgeRef h2 = best_edge->halfedge()->twin();
         do {
             edge_queue.remove(Edge_Record(vertex_quadrics, h2->edge()));
             edge_records.erase(h2->edge());
             h2 = h2->twin()->next();
-        } while (h2 != best_edge.edge->halfedge()->twin());
+        } while (h2 != best_edge->halfedge()->twin());
 
         // Collapse the edge.
-        auto new_vertex = collapse_edge_erase(best_edge.edge);
+        auto new_vertex = collapse_edge_erase(best_edge);
         if (!new_vertex.has_value())
             continue;
 
@@ -1175,10 +1256,7 @@ bool Halfedge_Mesh::simplify() {
         } while (h_ != new_vertex.value()->halfedge());
 
         iteration += 1;
-
-        count = 0;
-        for (auto f = faces_begin(); f != faces_end(); f++)
-            count += 1;
+        count -= 2;
     }
 
     printf("total iterations %zu", iteration);
