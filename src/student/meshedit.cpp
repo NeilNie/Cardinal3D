@@ -658,6 +658,8 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_face(Halfedge_Mesh::F
         edge_to_next->halfedge() = h_v_to_next;
 
         v->halfedge() = h_v_to_old;
+        
+        v->pos = og_vertices[i]->pos;
 
         // small face halfedge
         new_small_face->halfedge() = he_from_og_vertex;
