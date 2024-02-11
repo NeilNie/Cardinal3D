@@ -6,6 +6,13 @@
 #include "../geometry/halfedge.h"
 #include "debug.h"
 
+
+Vec3 face_normal(Halfedge_Mesh::FaceRef f) {
+    auto v1 = f->halfedge()->vertex()->pos - f->halfedge()->twin()->vertex()->pos;
+    auto v2 = f->halfedge()->next()->vertex()->pos - f->halfedge()->next()->twin()->vertex()->pos;
+    return cross(v1, v2).normalize();
+}
+
 /* Note on local operation return types:
 
     The local operations all return a std::optional<T> type. This is used so that your
@@ -165,13 +172,25 @@ bool can_collapse_edge(Halfedge_Mesh::EdgeRef e) {
     return true;
 }
 
+
+std::unordered_map<Halfedge_Mesh::FaceRef, Vec3> all_face_normals(Halfedge_Mesh::VertexRef v) {
+
+    std::unordered_map<Halfedge_Mesh::FaceRef, Vec3> og_face_normals;
+    Halfedge_Mesh::HalfedgeRef h = v->halfedge();
+    do {
+        og_face_normals[h->face()] = face_normal(h->face());
+        h = h->twin()->next();
+    } while (h != v->halfedge());
+
+    return og_face_normals;
+}
+
 /*
     This method should collapse the given edge and return an iterator to
     the new vertex created by the collapse.
 */
 
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
-
 
     if (!can_collapse_edge(e)) {
         return std::nullopt;
@@ -184,17 +203,23 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     auto v3 = new_vertex();
     v3->pos = (v1->pos + v2->pos) / 2;
 
+    auto face_normals_before = all_face_normals(v1);
+    auto r2 = all_face_normals(v2);
+    face_normals_before.insert(r2.begin(), r2.end());
+
     // reassign halfedges for all vertex v1 and v2
     auto edges_v1 = get_all_half_edges_of_vertex(v1);
     auto edges_v2 = get_all_half_edges_of_vertex(v2);
     std::vector<Halfedge_Mesh::HalfedgeRef> all_half_edges;
+    std::vector<Halfedge_Mesh::VertexRef > og_half_edge_vertices;
     all_half_edges.reserve(edges_v1.size() + edges_v2.size());
     all_half_edges.insert(all_half_edges.end(), edges_v1.begin(), edges_v1.end());
     all_half_edges.insert(all_half_edges.end(), edges_v2.begin(), edges_v2.end());
 
-    for (auto halfedge: all_half_edges)
+    for (auto halfedge: all_half_edges) {
+        og_half_edge_vertices.push_back(halfedge->vertex());
         halfedge->vertex() = v3;
-
+    }
     v3->halfedge() = all_half_edges[0];
 
     // collapse overlapping edges
@@ -1017,13 +1042,14 @@ struct Edge_Record {
         Vec3 b = Vec3(-endpoints_sum[3][0], -endpoints_sum[3][1], -endpoints_sum[3][2]);  // computed by extracting minus the upper-right 3x1 column from the same matrix
 
         Vec3 x_ = (e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 2;
-        if (fabs(1 - A.det()) > 1e-4) {
+        if (fabs(A.det()) > 1e-4)
             x_ = A.inverse() * b;
-        }
 
         this->optimal = x_;
         this->edge = e;
-        this->cost = dot(this->optimal, endpoints_sum * this->optimal);
+
+        Vec4 inter = endpoints_sum * Vec4(this->optimal[0], this->optimal[1], this->optimal[2], 1.f);
+        this->cost = dot(inter, Vec4(this->optimal[0], this->optimal[1], this->optimal[2], 1.f));
     }
     Halfedge_Mesh::EdgeRef edge;
     Vec3 optimal;
@@ -1116,13 +1142,6 @@ template<class T> struct PQueue {
     std::set<T> queue;
 };
 
-
-Vec3 face_normal(Halfedge_Mesh::FaceRef f) {
-    auto v1 = f->halfedge()->vertex()->pos - f->halfedge()->twin()->vertex()->pos;
-    auto v2 = f->halfedge()->next()->vertex()->pos - f->halfedge()->next()->twin()->vertex()->pos;
-    return cross(v1, v2).normalize();
-}
-
 /*
     Mesh simplification. Note that this function returns success in a similar
     manner to the local operations, except with only a boolean value.
@@ -1184,6 +1203,7 @@ bool Halfedge_Mesh::simplify() {
         Edge_Record record = Edge_Record(vertex_quadrics, e);
         edge_records[e] = record;
         edge_queue.insert(record);
+        printf("cost %f\n", record.cost);
     }
 
     size_t iteration = 0;
@@ -1195,24 +1215,23 @@ bool Halfedge_Mesh::simplify() {
 
     // TODO: preserve manifoldness
     // bool stop = true;
-    while (count > face_count / 4 && edge_queue.size() > 0) {
+    while (count > std::max(face_count / 4, (size_t)4) && edge_queue.size() > 0) {
 
-        for (auto f = faces_begin(); f != faces_end(); f++) {
-            int edge_count = 0;
-            Halfedge_Mesh::HalfedgeRef h = f->halfedge();
-            do {
-                h = h->next();
-                edge_count += 1;
-            } while (h != f->halfedge());
-            if (edge_count != 3) {
-                printf("not all faces are triangles! edge count: %d\n", edge_count);
-                triangulate();
-                break;
-            }
+        std::vector<EdgeRef> popped_edges;
+        EdgeRef cheapest_e = edge_queue.top().edge;
+        while(!can_collapse_edge(cheapest_e)) {
+            edge_queue.pop();
+            popped_edges.push_back(cheapest_e);
+            cheapest_e = edge_queue.top().edge;
+        }
+        for(EdgeRef e : popped_edges) {
+            Edge_Record r = edge_records[e];
+            edge_queue.insert(r);
         }
 
         // Get the cheapest edge from the queue.
-        EdgeRef best_edge = edge_queue.top().edge;
+        EdgeRef best_edge = cheapest_e; // edge_queue.top().edge;
+        auto opt_point = edge_records[best_edge].optimal;
 
         printf("queue size: %zu, edge record size: %zu\n", edge_queue.size(), edge_records.size());
         printf("picking edge %d\n", best_edge->id());
@@ -1242,6 +1261,8 @@ bool Halfedge_Mesh::simplify() {
         auto new_vertex = collapse_edge_erase(best_edge);
         if (!new_vertex.has_value())
             continue;
+
+        new_vertex.value()->pos = opt_point;
 
         // Set the quadric of the new vertex to the quadric computed in Step 3.
         vertex_quadrics[new_vertex.value()] = new_quadrics;
