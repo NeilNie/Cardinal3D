@@ -13,6 +13,17 @@ Vec3 face_normal(Halfedge_Mesh::FaceRef f) {
     return cross(v1, v2).normalize();
 }
 
+std::vector<Halfedge_Mesh::VertexRef> collect_vertices(Halfedge_Mesh::FaceRef f) {
+
+    std::vector<Halfedge_Mesh::VertexRef> vertices;
+    Halfedge_Mesh::HalfedgeRef h = f->halfedge();
+    do {
+        vertices.push_back(h->vertex());
+        h = h->next();
+    } while (h != f->halfedge());
+    return vertices;
+}
+
 /* Note on local operation return types:
 
     The local operations all return a std::optional<T> type. This is used so that your
@@ -105,8 +116,48 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh:
  */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_edge(Halfedge_Mesh::EdgeRef e) {
 
-    (void)e;
-    return std::nullopt;
+    if (e->on_boundary())
+        return std::nullopt;
+
+    // halfedges and vertices involved
+
+    auto h0 = e->halfedge();
+    auto h1 = h0->twin();
+    auto h2 = h0->next();
+    auto h3 = h1->next();
+
+    // important: find the previous of h0 and h1
+    auto h0_prev = h2;
+    auto h1_prev = h3;
+    while (h0_prev->next() != h0)
+        h0_prev = h0_prev->next();
+    while (h1_prev->next() != h1) 
+        h1_prev = h1_prev->next();
+
+    VertexRef v0 = h0->vertex();
+    VertexRef v1 = h1->vertex();
+    FaceRef f0 = h0->face();
+    FaceRef f1 = h1->face();
+
+    // -----reassign elements-----
+    HalfedgeRef h = h3;
+    do {
+        h->face() = f0;
+        h = h->next();
+    } while(h != h1);
+    h0_prev->next() = h3;
+    h1_prev->next() = h2;
+    v0->halfedge() = h3;
+    v1->halfedge() = h2;
+    f0->halfedge() = h2;
+
+    // -----delete elements-----
+    erase(h0);
+    erase(h1);
+    erase(f1);
+    erase(e);
+
+    return f0;
 }
 
 std::vector<Halfedge_Mesh::HalfedgeRef> get_all_half_edges_of_vertex(Halfedge_Mesh::VertexRef v) {
@@ -145,10 +196,10 @@ void reassign_erase_for_collapse_edge(Halfedge_Mesh* mesh, Halfedge_Mesh::Halfed
 
     Halfedge_Mesh::FaceRef face = h0->face();
 
-    Halfedge_Mesh::HalfedgeRef h1 = h0->next();
-    Halfedge_Mesh::HalfedgeRef h2 = h0->next()->next();
-    Halfedge_Mesh::HalfedgeRef h3 = h0->next()->next()->twin();
-    Halfedge_Mesh::HalfedgeRef h4 = h0->next()->twin();
+    auto h1 = h0->next();
+    auto h2 = h0->next()->next();
+    auto h3 = h0->next()->next()->twin();
+    auto h4 = h0->next()->twin();
 
     Halfedge_Mesh::VertexRef v = h2->vertex();
 
@@ -322,59 +373,51 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_face(Halfedge_Me
 */
 std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::EdgeRef e) {
 
-    // TODO: required
-    // Get the two faces
-    FaceRef f0 = e->halfedge()->face();
-    FaceRef f1 = e->halfedge()->twin()->face();
-
-    // return immediately if on boundary
-    if(f0->is_boundary() || f1->is_boundary())
-    {
-        printf("skipping flip because on boundary\n");
+    if (e->on_boundary())
         return std::nullopt;
-    }
 
-    // HALF EDGES
-    HalfedgeRef h0 = e->halfedge(), h1 = h0->next(), h2 = h1->next();           // triangle 1
-    HalfedgeRef h3 = h0->twin(), h4 = h3->next(), h5 = h4->next();              // triangle 2
-    HalfedgeRef h6 = h1->twin(), h7 = h2->twin(), h8 = h4->twin(), h9 = h5->twin(); // outside
+    auto h0 = e->halfedge();
+    auto h1 = h0->twin();
+    auto h2 = h0->next();
+    auto h3 = h2->next();
+    auto h5 = h1->next();
+    auto h6 = h5->next();
 
-    // reset h4 and h7 to support general polygon
-    while(h4->next() != h0)
-        h4 = h4->next();
-    while(h7->next() != h1)
-        h7 = h7->next();
+    // important! find the previous of h0 and h1
+    auto h0_prev = h3;
+    auto h1_prev = h6;
+    while (h0_prev->next() != h0)
+        h0_prev = h0_prev->next();
+    while (h1_prev->next() != h1)
+        h1_prev = h1_prev->next();
 
-    // VERTICES
-    VertexRef v0 = h0->vertex(), v1 = h3->vertex(), v2 = h8->vertex(), v3 = h6->vertex();
+    // VERTICES, operation is flip edge from (v0, v1) to edge from (v2, v3)
+    VertexRef v0 = h0->vertex();
+    VertexRef v1 = h1->vertex();
+    VertexRef v2 = h6->vertex();
+    VertexRef v3 = h3->vertex();
 
-    // EDGES
-    EdgeRef e1 = h5->edge(), e2 = h4->edge(), e3 = h2->edge(), e4 = h1->edge();
+    // faces
+    FaceRef f0 = h0->face(), f1 = h1->face();
 
-    h0->set_neighbors(h1, h3, v2, e, f0);
-    h1->set_neighbors(h2, h7, v3, e3, f0);
-    h2->set_neighbors(h0, h8, v0, e2, f0);
-    h3->set_neighbors(h4, h0, v3, e, f1);
-    h4->set_neighbors(h5, h9, v2, e1, f1);
-    h5->set_neighbors(h3, h6, v1, e4, f1);
-    h6->set_neighbors(h6->next(), h5, v3, e4, h6->face());
-    h7->set_neighbors(h7->next(), h1, v0, e3, h7->face());
-    h8->set_neighbors(h8->next(), h2, v2, e2, h8->face());
-    h9->set_neighbors(h9->next(), h4, v1, e1, h9->face());
+    // reassign vertices and faces
+    v0->halfedge() = h5, v1->halfedge() = h2;
+    f0->halfedge() = h0, f1->halfedge() = h1;
 
-    v0->halfedge() = h2;
-    v1->halfedge() = h5;
-    v2->halfedge() = h4;
-    v3->halfedge() = h3;
+    // reassign half edges
+    //                  next twin vertex edge face
+    h0->set_neighbors(  h3,  h1,  v2,    e,   f0);
+    h1->set_neighbors(  h6,  h0,  v3,    e,   f1);
 
-    e->halfedge() = h0;
-    e1->halfedge() = h4;
-    e2->halfedge() = h2;
-    e3->halfedge() = h1;
-    e4->halfedge() = h5;
+    h5->next() = h0;
+    h5->face() = f0;
 
-    f0->halfedge() = h0;
-    f1->halfedge() = h3;
+    h2->next() = h1;
+    h2->face() = f1;
+
+    h0_prev->next() = h5;
+    h1_prev->next() = h2;
+
     return e;
 }
 
@@ -530,17 +573,6 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_edge(Halfedge_Mesh::E
     return std::nullopt;
 }
 
-std::vector<Halfedge_Mesh::VertexRef> collect_vertices(Halfedge_Mesh::FaceRef f) {
-
-    std::vector<Halfedge_Mesh::VertexRef> vertices;
-    Halfedge_Mesh::HalfedgeRef h = f->halfedge();
-    do {
-        vertices.push_back(h->vertex());
-        h = h->next();
-    } while (h != f->halfedge());
-    return vertices;
-}
-
 Halfedge_Mesh::HalfedgeRef half_edge_from_vertex(Halfedge_Mesh::FaceRef f, Halfedge_Mesh::VertexRef v) {
 
     Halfedge_Mesh::HalfedgeRef h = f->halfedge();
@@ -563,14 +595,6 @@ Halfedge_Mesh::HalfedgeRef half_edge_to_vertex_on_face(Halfedge_Mesh::FaceRef f,
     return h;
 }
 
-void reset_halfedge_face(Halfedge_Mesh::FaceRef f) {
-
-    Halfedge_Mesh::HalfedgeRef h = f->halfedge();
-    do {
-        h->face() = f;
-        h = h->next();
-    } while (h != f->halfedge());
-}
 
 /*
     This method should replace the face f with an additional, inset face
@@ -658,7 +682,7 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_face(Halfedge_Mesh::F
         edge_to_next->halfedge() = h_v_to_next;
 
         v->halfedge() = h_v_to_old;
-        
+    
         v->pos = og_vertices[i]->pos;
 
         // small face halfedge
@@ -1107,7 +1131,7 @@ struct Edge_Record {
                         Vec4(endpoints_sum[2][0], endpoints_sum[2][1], endpoints_sum[2][2], 0.f),
                         Vec4(0.0f, 0.f, 0.f, 1.f));
 
-        Vec3 b = Vec3(-endpoints_sum[3][0], -endpoints_sum[3][1], -endpoints_sum[3][2]);  // computed by extracting minus the upper-right 3x1 column from the same matrix
+        Vec3 b = Vec3(-endpoints_sum[3][0], -endpoints_sum[3][1], -endpoints_sum[3][2]);
 
         Vec3 x_ = (e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 2;
         if (fabs(A.det()) > 1e-4)
@@ -1134,60 +1158,7 @@ bool operator<(const Edge_Record& r1, const Edge_Record& r2) {
     return &*e1 < &*e2;
 }
 
-/** Helper type for quadric simplification
- *
- * A PQueue is a minimum-priority queue that
- * allows elements to be both inserted and removed from the
- * queue.  Together, one can easily change the priority of
- * an item by removing it, and re-inserting the same item
- * but with a different priority.  A priority queue, for
- * those who don't remember or haven't seen it before, is a
- * data structure that always keeps track of the item with
- * the smallest priority or "score," even as new elements
- * are inserted and removed.  Priority queues are often an
- * essential component of greedy algorithms, where one wants
- * to iteratively operate on the current "best" element.
- *
- * PQueue is templated on the type T of the object
- * being queued.  For this reason, T must define a comparison
- * operator of the form
- *
- *    bool operator<( const T& t1, const T& t2 )
- *
- * which returns true if and only if t1 is considered to have a
- * lower priority than t2.
- *
- * Basic use of a PQueue might look
- * something like this:
- *
- *    // initialize an empty queue
- *    PQueue<myItemType> queue;
- *
- *    // add some items (which we assume have been created
- *    // elsewhere, each of which has its priority stored as
- *    // some kind of internal member variable)
- *    queue.insert( item1 );
- *    queue.insert( item2 );
- *    queue.insert( item3 );
- *
- *    // get the highest priority item currently in the queue
- *    myItemType highestPriorityItem = queue.top();
- *
- *    // remove the highest priority item, automatically
- *    // promoting the next-highest priority item to the top
- *    queue.pop();
- *
- *    myItemType nextHighestPriorityItem = queue.top();
- *
- *    // Etc.
- *
- *    // We can also remove an item, making sure it is no
- *    // longer in the queue (note that this item may already
- *    // have been removed, if it was the 1st or 2nd-highest
- *    // priority item!)
- *    queue.remove( item2 );
- *
- */
+
 template<class T> struct PQueue {
     void insert(const T& item) {
         queue.insert(item);
@@ -1223,39 +1194,21 @@ bool Halfedge_Mesh::simplify() {
     std::unordered_map<EdgeRef, Edge_Record> edge_records;
     PQueue<Edge_Record> edge_queue;
 
-    // TODO: check if the mesh only contains triangles
-
-    // Note: if you erase elements in a local operation, they will not be actually deleted
-    // until do_erase or validate are called. This is to facilitate checking
-    // for dangling references to elements that will be erased.
-    // The rest of the codebase will automatically call validate() after each op,
-    // but here simply calling collapse_edge() will not erase the elements.
-    // You should use collapse_edge_erase() instead for the desired behavior.
-
-    // Compute quadrics for each face by simply writing the plane equation for that face in homogeneous coordinates, 
-    // and building the corresponding quadric matrix using outer(). This matrix should be stored in the yet-unmentioned
-    // dictionary face_quadrics.
-
-    // Compute an initial quadric for each vertex by adding up the quadrics at all the faces touching that vertex. 
-    // This matrix should be stored in vertex_quadrics. (Note that these quadrics must be updated as edges are collapsed.)
-
-    // For each edge, create an Edge_Record, insert it into the edge_records dictionary, and add it to one global 
-    // PQueue<Edge_Record> queue.
-
-    // Until a target number of triangles is reached, collapse the best/cheapest edge (as determined by the priority queue) 
-    // and set the quadric at the new vertex to the sum of the quadrics at the endpoints of the original edge. 
-    // You will also have to update the cost of any edge connected to this vertex.
-
-    // faces
+    // faces ===================================================================
     size_t face_count = 0;
     for (auto f = faces_begin(); f != faces_end(); f++) {
+
+        auto num_vertices = collect_vertices(f);
+        if (num_vertices.size() != 3)
+            return false;
+
         face_count += 1;
         auto normal = face_normal(f);
         float d = - dot(normal, f->halfedge()->vertex()->pos);
         face_quadrics[f] = outer(Vec4(normal, d), Vec4(normal, d));
     }
 
-    // vertices
+    // vertices ================================================================
     for (auto v = vertices_begin(); v != vertices_end(); v++) {
         Mat4 sum = Mat4::Zero;
         Halfedge_Mesh::HalfedgeRef h = v->halfedge();
@@ -1266,12 +1219,11 @@ bool Halfedge_Mesh::simplify() {
         vertex_quadrics[v] = sum;
     }
 
-    // edges
+    // edges ===================================================================
     for (auto e = edges_begin(); e != edges_end(); e++) {
         Edge_Record record = Edge_Record(vertex_quadrics, e);
         edge_records[e] = record;
         edge_queue.insert(record);
-        printf("cost %f\n", record.cost);
     }
 
     size_t iteration = 0;
@@ -1281,25 +1233,24 @@ bool Halfedge_Mesh::simplify() {
     printf("map size: %zu\n", edge_records.size());
     printf("edge_queue size: %zu\n", edge_queue.size());
 
-    // TODO: preserve manifoldness
-    // bool stop = true;
     while (count > std::max(face_count / 4, (size_t)4) && edge_queue.size() > 0) {
 
-        std::vector<EdgeRef> popped_edges;
-        EdgeRef cheapest_e = edge_queue.top().edge;
-        while(!can_collapse_edge(cheapest_e)) {
+        std::vector<EdgeRef> tmp_removed_edges;
+        EdgeRef best_edge = edge_queue.top().edge;
+        while (!can_collapse_edge(best_edge)) {
             edge_queue.pop();
-            popped_edges.push_back(cheapest_e);
-            cheapest_e = edge_queue.top().edge;
+            tmp_removed_edges.push_back(best_edge);
+            best_edge = edge_queue.top().edge;
         }
-        for(EdgeRef e : popped_edges) {
+        for( EdgeRef e : tmp_removed_edges) {
             Edge_Record r = edge_records[e];
             edge_queue.insert(r);
         }
 
         // Get the cheapest edge from the queue.
-        EdgeRef best_edge = cheapest_e; // edge_queue.top().edge;
         auto opt_point = edge_records[best_edge].optimal;
+
+        // ---------------------------------------------------------------------
 
         printf("queue size: %zu, edge record size: %zu\n", edge_queue.size(), edge_records.size());
         printf("picking edge %d\n", best_edge->id());
