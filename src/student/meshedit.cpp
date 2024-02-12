@@ -1134,7 +1134,7 @@ struct Edge_Record {
         Vec3 b = Vec3(-endpoints_sum[3][0], -endpoints_sum[3][1], -endpoints_sum[3][2]);
 
         Vec3 x_ = (e->halfedge()->vertex()->pos + e->halfedge()->twin()->vertex()->pos) / 2;
-        if (fabs(A.det()) > 1e-4)
+        if (fabs(A.det()) > 0.1)
             x_ = A.inverse() * b;
 
         this->optimal = x_;
@@ -1299,7 +1299,7 @@ bool Halfedge_Mesh::simplify() {
         count -= 2;
     }
 
-    printf("total iterations %zu", iteration);
+    printf("total iterations %zu \n", iteration);
     printf("total count left face count: %zu\n", count);
 
     return true;
